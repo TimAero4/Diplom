@@ -105,3 +105,65 @@ resource "yandex_vpc_security_group" "web_sg" {
     v4_cidr_blocks = ["198.18.235.0/24", "198.18.248.0/24"]
   }
 }
+
+
+resource "yandex_vpc_security_group" "zabbix_sg" {
+  name       = "zabbix-sg-${var.flow}"
+  network_id = yandex_vpc_network.develop.id
+
+  ingress {
+    description    = "Allow Zabbix Web UI"
+    protocol       = "TCP"
+    port           = 80
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description    = "Allow Zabbix Agent"
+    protocol       = "TCP"
+    port           = 10050
+    v4_cidr_blocks = ["10.0.0.0/8"]
+  }
+
+  ingress {
+    description    = "Allow Zabbix Server"
+    protocol       = "TCP"
+    port           = 10051
+    v4_cidr_blocks = ["10.0.0.0/8"]
+  }
+
+  egress {
+    description    = "Permit ANY"
+    protocol       = "ANY"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+    from_port      = 0
+    to_port        = 65535
+  }
+}
+
+resource "yandex_vpc_security_group" "elastic_sg" {
+  name       = "elastic-sg-${var.flow}"
+  network_id = yandex_vpc_network.develop.id
+
+  ingress {
+    description    = "Allow Elasticsearch"
+    protocol       = "TCP"
+    port           = 9200
+    v4_cidr_blocks = ["10.0.0.0/8"]
+  }
+
+  ingress {
+    description    = "Allow Kibana"
+    protocol       = "TCP"
+    port           = 5601
+    v4_cidr_blocks = ["10.0.0.0/8"]
+  }
+
+  egress {
+    description    = "Permit ANY"
+    protocol       = "ANY"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+    from_port      = 0
+    to_port        = 65535
+  }
+}

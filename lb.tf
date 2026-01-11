@@ -1,16 +1,21 @@
-# Target Group
-resource "yandex_alb_target_group" "web_tg" {
-  name      = "web-target-group-${var.flow}"
+# Target Groups (one per subnet/zone)
+resource "yandex_alb_target_group" "web_tg_a" {
+  name      = "web-target-group-a-${var.flow}"
   folder_id = var.folder_id
 
   target {
     subnet_id = yandex_vpc_subnet.develop_a.id
-    ip_address = yandex_compute_instance.web_1.network_interface.0.ip_address
+    ip_address = yandex_compute_instance.web_1.network_interface[0].ip_address
   }
+}
+
+resource "yandex_alb_target_group" "web_tg_b" {
+  name      = "web-target-group-b-${var.flow}"
+  folder_id = var.folder_id
 
   target {
     subnet_id = yandex_vpc_subnet.develop_b.id
-    ip_address = yandex_compute_instance.web_2.network_interface.0.ip_address
+    ip_address = yandex_compute_instance.web_2.network_interface[0].ip_address
   }
 }
 
@@ -23,7 +28,10 @@ resource "yandex_alb_backend_group" "web_bg" {
     name         = "web-backend"
     weight       = 1
     port         = 80
-    target_group_ids = [yandex_alb_target_group.web_tg.id]
+    target_group_ids = [
+      yandex_alb_target_group.web_tg_a.id,
+      yandex_alb_target_group.web_tg_b.id
+    ]
     
     healthcheck {
       timeout  = "1s"
@@ -39,20 +47,23 @@ resource "yandex_alb_backend_group" "web_bg" {
 resource "yandex_alb_http_router" "web_router" {
   name        = "web-router-${var.flow}"
   folder_id   = var.folder_id
+}
 
-  virtual_host {
-    name      = "virtual-host"
-    route {
-      name = "main-route"
-      http_route {
-        http_route_action {
-          backend_group_id = yandex_alb_backend_group.web_bg.id
-          timeout          = "3s"
-        }
+# Virtual Host (separate resource)
+resource "yandex_alb_virtual_host" "web_virtual_host" {
+  name           = "virtual-host"
+  http_router_id = yandex_alb_http_router.web_router.id
+  route {
+    name = "main-route"
+    http_route {
+      http_route_action {
+        backend_group_id = yandex_alb_backend_group.web_bg.id
+        timeout          = "3s"
       }
     }
   }
 }
+
 
 # Application Load Balancer
 resource "yandex_alb_load_balancer" "web_balancer" {
@@ -88,8 +99,8 @@ resource "yandex_alb_load_balancer" "web_balancer" {
 
   log_options {
     discard_rule {
-      http_codes = ["200"]
-      percentage = 50
+      http_codes = [200]
+      discard_percent = 50
     }
   }
 }
@@ -98,4 +109,3 @@ resource "yandex_alb_load_balancer" "web_balancer" {
 output "load_balancer_ip" {
   value = yandex_alb_load_balancer.web_balancer.listener[0].endpoint[0].address[0].external_ipv4_address[0].address
 }
-

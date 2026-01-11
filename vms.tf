@@ -29,7 +29,7 @@ resource "yandex_compute_instance" "bastion" {
     serial-port-enable = 1
   }
 
-  scheduling_policy { preemptible = true }
+  scheduling_policy { preemptible = false }
 
   network_interface {
     subnet_id          = yandex_vpc_subnet.develop_a.id #зона ВМ должна совпадать с зоной subnet!!!
@@ -65,7 +65,7 @@ resource "yandex_compute_instance" "web_1" {
     serial-port-enable = 1
   }
 
-  scheduling_policy { preemptible = true }
+  scheduling_policy { preemptible = false }
 
   network_interface {
     subnet_id          = yandex_vpc_subnet.develop_a.id
@@ -99,7 +99,7 @@ resource "yandex_compute_instance" "web_2" {
     serial-port-enable = 1
   }
 
-  scheduling_policy { preemptible = true }
+  scheduling_policy { preemptible = false }
 
   network_interface {
     subnet_id          = yandex_vpc_subnet.develop_b.id
@@ -108,6 +108,76 @@ resource "yandex_compute_instance" "web_2" {
 
   }
 }
+
+resource "yandex_compute_instance" "zabbix" {
+  name        = "zabbix-1"
+  hostname    = "zabbix-1"
+  platform_id = "standard-v3"
+  zone        = "ru-central1-a"
+
+  resources {
+    cores         = 2
+    memory        = 4
+    core_fraction = 20
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = data.yandex_compute_image.ubuntu_2204_lts.image_id
+      type     = "network-hdd"
+      size     = 20
+    }
+  }
+
+  metadata = {
+    user-data          = file("./cloud-init.yml")
+    serial-port-enable = 1
+  }
+
+  scheduling_policy { preemptible = false }
+
+  network_interface {
+    subnet_id          = yandex_vpc_subnet.develop_a.id
+    nat                = true
+    security_group_ids = [yandex_vpc_security_group.LAN.id, yandex_vpc_security_group.bastion.id]
+  }
+}
+
+
+resource "yandex_compute_instance" "elastic" {
+  name        = "elastic-1"
+  hostname    = "elastic-1"
+  platform_id = "standard-v3"
+  zone        = "ru-central1-b"
+
+  resources {
+    cores         = 2
+    memory        = 4
+    core_fraction = 20
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = data.yandex_compute_image.ubuntu_2204_lts.image_id
+      type     = "network-hdd"
+      size     = 20
+    }
+  }
+
+  metadata = {
+    user-data          = file("./cloud-init.yml")
+    serial-port-enable = 1
+  }
+
+  scheduling_policy { preemptible = false }
+
+  network_interface {
+    subnet_id          = yandex_vpc_subnet.develop_b.id
+    nat                = false
+    security_group_ids = [yandex_vpc_security_group.LAN.id]
+  }
+}
+
 
 
 resource "local_file" "inventory" {
@@ -118,8 +188,20 @@ resource "local_file" "inventory" {
   [webservers]
   ${yandex_compute_instance.web_1.network_interface.0.ip_address}
   ${yandex_compute_instance.web_2.network_interface.0.ip_address}
+  
+   
+  [zabbix]
+  ${yandex_compute_instance.zabbix.network_interface.0.nat_ip_address}
+  
+  [elastic]
+  ${yandex_compute_instance.elastic.network_interface.0.ip_address}
+
   [webservers:vars]
   ansible_ssh_common_args='-o ProxyCommand="ssh -p 22 -W %h:%p -q user@${yandex_compute_instance.bastion.network_interface.0.nat_ip_address}"'
+  
+  [elastic:vars]
+  ansible_ssh_common_args='-o ProxyCommand="ssh -p 22 -W %h:%p -q user@${yandex_compute_instance.bastion.network_interface.0.nat_ip_address}"'
+  
   XYZ
   filename = "./hosts.ini"
 }
