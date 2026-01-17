@@ -26,8 +26,8 @@ Host *.ru-central1.internal
 Или более простой для понимания, но менее удобный для частого применения: ssh -J <jump server> <remote server>
 
 ## load_balancer_ip = "158.160.170.83"
-## bastion external_ip = 158.160.109.246 internal_ip = 10.0.1.34
-## zabbix-1 external_ip = 158.160.117.47 internal_ip = 10.0.1.13
-## web-1 internal_ip = 10.0.1.31
-## web-2 internal_ip = 10.0.2.26
-## elastic-1 internal_ip = 10.0.2.29
+## bastion external_ip = 178.154.221.232 internal_ip = 10.0.1.18
+## zabbix-1 external_ip = 158.160.110.133 internal_ip = 10.0.1.6
+## web-1 internal_ip = 10.0.1.4
+## web-2 internal_ip = 10.0.2.5
+## elastic-1 internal_ip = 10.0.2.11
