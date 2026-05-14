@@ -1,0 +1,47 @@
+- name: Install and configure Filebeat
+  hosts: webservers
+  become: yes
+  vars:
+    elasticsearch_host: "{{ hostvars[groups['elastic'][0]]['ansible_host'] }}"
+
+  tasks:
+    - name: Add Elastic apt key
+      apt_key:
+        url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+        state: present
+
+    - name: Add Elastic repository
+      apt_repository:
+        repo: "deb https://artifacts.elastic.co/packages/8.x/apt stable main"
+        state: present
+        update_cache: yes
+
+    - name: Install Filebeat
+      apt:
+        name: filebeat
+        state: present
+
+    - name: Configure Filebeat
+      template:
+        src: filebeat.yml.j2
+        dest: /etc/filebeat/filebeat.yml
+        owner: root
+        group: root
+        mode: '0600'
+      notify: restart filebeat
+
+    - name: Enable and configure Filebeat modules
+      command: filebeat modules enable nginx
+      notify: restart filebeat
+
+    - name: Start and enable Filebeat
+      service:
+        name: filebeat
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: restart filebeat
+      service:
+        name: filebeat
+        state: restarted

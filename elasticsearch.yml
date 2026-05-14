@@ -1,0 +1,48 @@
+- name: Install and configure Elasticsearch
+  hosts: elastic
+  become: yes
+
+  tasks:
+    - name: Install Java
+      apt:
+        name:
+          - openjdk-11-jdk
+        state: present
+        update_cache: yes
+
+    - name: Add Elasticsearch apt key
+      apt_key:
+        url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+        state: present
+
+    - name: Add Elasticsearch repository
+      apt_repository:
+        repo: "deb https://artifacts.elastic.co/packages/8.x/apt stable main"
+        state: present
+        update_cache: yes
+
+    - name: Install Elasticsearch
+      apt:
+        name: elasticsearch
+        state: present
+
+    - name: Configure Elasticsearch
+      template:
+        src: elasticsearch.yml.j2
+        dest: /etc/elasticsearch/elasticsearch.yml
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart elasticsearch
+
+    - name: Start and enable Elasticsearch
+      service:
+        name: elasticsearch
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: restart elasticsearch
+      service:
+        name: elasticsearch
+        state: restarted

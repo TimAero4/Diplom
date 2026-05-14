@@ -1,0 +1,72 @@
+- name: Установка и настройка Zabbix агентов
+  hosts: webservers:elastic
+  become: yes
+  vars:
+    zabbix_server_ip: "{{ hostvars[groups['zabbix'][0]]['ansible_host'] }}"
+
+  tasks:
+    - name: Загрузка пакета репозитория Zabbix
+      get_url:
+        url: https://repo.zabbix.com/zabbix/6.4/ubuntu/pool/main/z/zabbix-release/zabbix-release_6.4-1+ubuntu22.04_all.deb
+        dest: /tmp/zabbix-release.deb
+
+    - name: Установка репозитория Zabbix
+      apt:
+        deb: /tmp/zabbix-release.deb
+        state: present
+
+    - name: Установка Zabbix агента
+      apt:
+        name: zabbix-agent
+        state: present
+        update_cache: yes
+
+    - name: Настройка Zabbix агента
+      template:
+        src: zabbix_agentd.conf.j2
+        dest: /etc/zabbix/zabbix_agentd.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart zabbix agent
+      register: config_result
+
+    - name: Отладка конфигурации
+      debug:
+        var: config_result
+
+    - name: Проверка синтаксиса конфигурации Zabbix агента
+      command: zabbix_agentd -t -c /etc/zabbix/zabbix_agentd.conf
+      register: syntax_check
+      ignore_errors: yes
+
+    - name: Показать результаты проверки синтаксиса
+      debug:
+        var: syntax_check
+
+    - name: Запуск и включение Zabbix агента
+      service:
+        name: zabbix-agent
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: restart zabbix agent
+      service:
+        name: zabbix-agent
+        state: restarted
+      register: restart_result
+
+    - name: Показать результаты перезапуска
+      debug:
+        var: restart_result
+
+    - name: Получить статус сервиса
+      command: systemctl status zabbix-agent
+      register: service_status
+      when: restart_result is failed
+
+    - name: Показать статус сервиса
+      debug:
+        var: service_status
+      when: restart_result is failed
