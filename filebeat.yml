@@ -2,24 +2,20 @@
   hosts: webservers
   become: yes
   vars:
+    # Мы не используем внешние URL, полагаемся на apt cache
     elasticsearch_host: "{{ hostvars[groups['elastic'][0]]['ansible_host'] }}"
 
   tasks:
-    - name: Add Elastic apt key
-      apt_key:
-        url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
-        state: present
-
-    - name: Add Elastic repository
-      apt_repository:
-        repo: "deb https://artifacts.elastic.co/packages/8.x/apt stable main"
-        state: present
+    - name: Update apt cache
+      apt:
         update_cache: yes
+        cache_valid_time: 3600
 
-    - name: Install Filebeat
+    - name: Install Filebeat from system repository
       apt:
         name: filebeat
         state: present
+      # Эта команда попытается найти filebeat в /etc/apt/sources.list (обычно репозитории Ubuntu)
 
     - name: Configure Filebeat
       template:

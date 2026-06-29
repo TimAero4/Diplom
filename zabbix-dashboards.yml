@@ -4,15 +4,13 @@
   vars_files:
     - ansible_vault.yml
   vars:
-    # Переменные 
     zabbix_url: "http://{{ zabbix_ip | default('127.0.0.1') }}/api_jsonrpc.php"
-
-    # Определяем, какие хосты к какой секции дашборда относятся
-    # Явно маппим группы инвентаря на переменные дашборда
+    
+    # ИСПРАВЛЕНИЕ 1: Приводим имена групп к единообразию.
+    # Предполагаем, что в inventory группа называется [zabbix].
     dashboard_hosts_web: "{{ groups['webservers'] | default([]) }}"
-    dashboard_hosts_infra: "{{ groups['bastion'] | default([]) + groups['zabbix_server'] | default([]) + groups['elastic'] | default([]) }}"
-
-    # Общие определения графиков для переиспользования
+    dashboard_hosts_infra: "{{ groups['bastion'] | default([]) + groups['zabbix'] | default([]) + groups['elastic'] | default([]) }}"
+    
     common_graphs:
       - { name: "CPU utilization", label: "CPU" }
       - { name: "Memory utilization", label: "RAM" }
@@ -20,29 +18,82 @@
       - { name: "Network traffic", label: "Network" }
 
   tasks:
-    - name: Отладка - Проверяем URL Zabbix API
-      debug:
-        msg: "Использую Zabbix API: {{ zabbix_url }}"
+    # Проверка соединения с API (опционально, но полезно для отладки)
+    - name: Проверка доступности Zabbix API
+      uri:
+        url: "{{ zabbix_url }}"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "apiinfo.version"
+          params: []
+          id: 1
+          auth: null
+        status_code: 200
+      register: zabbix_api_check
+      failed_when: zabbix_api_check.json is not defined
 
-    - name: Получить ID шаблона "Linux by Zabbix Agent"
-      community.zabbix.zabbix_template_info:
-        server_url: "{{ zabbix_url }}"
-        http_login_user: "{{ zabbix_api_user }}"
-        http_login_password: "{{ zabbix_api_password }}"
-        template_name: "Linux by Zabbix Agent"
-      register: template_info
+    # ИСПРАВЛЕНИЕ 2: Генерация виджетов через set_fact.
+    # Используем Jinja2 для формирования списка словарей.
+    
+    - name: Подготовить виджеты для Web Servers
+      set_fact:
+        web_widgets_final: >
+          {% set result = [] %}
+          {% for host_item in dashboard_hosts_web %}
+            {% for graph_item in common_graphs %}
+              {% set _ = result.append({
+                'type': 'graph',
+                'width': 12,
+                'height': 5,
+                'x': (loop.index0 * 12) % 24,
+                'y': (loop.index0 // 2) * 5,
+                'name': host_item + ' - ' + graph_item.label,
+                'resource_type': 'graph',
+                'graph': {
+                  'resource': {
+                    'name': graph_item.name,
+                    'host': host_item
+                  }
+                }
+              }) %}
+            {% endfor %}
+          {% endfor %}
+          {{ result }}
 
-    - name: Привязать шаблон к хостам Web и Elastic
-      community.zabbix.zabbix_host:
-        server_url: "{{ zabbix_url }}"
-        http_login_user: "{{ zabbix_api_user }}"
-        http_login_password: "{{ zabbix_api_password }}"
-        host_name: "{{ item }}"
-        link_templates:
-          - "{{ template_info.template[0].templateid }}"
-        status: enabled
-        state: present
-      loop: "{{ groups['webservers'] + groups['elastic'] }}"
+    - name: Подготовить виджеты для Infra
+      set_fact:
+        infra_widgets_final: >
+          {% set result = [] %}
+          {% for host_item in dashboard_hosts_infra %}
+            {% for graph_item in common_graphs %}
+              {% set _ = result.append({
+                'type': 'graph',
+                'width': 12,
+                'height': 5,
+                'x': (loop.index0 * 12) % 24,
+                'y': (loop.index0 // 2) * 5,
+                'name': host_item + ' - ' + graph_item.label,
+                'resource_type': 'graph',
+                'graph': {
+                  'resource': {
+                    'name': graph_item.name,
+                    'host': host_item
+                  }
+                }
+              }) %}
+            {% endfor %}
+          {% endfor %}
+          {{ result }}
+
+    # Отладка: можно раскомментировать для проверки содержимого списков перед запуском
+    # - name: Отладка web_widgets_final
+    #   debug:
+    #     var: web_widgets_final
+    # - name: Отладка infra_widgets_final
+    #   debug:
+    #     var: infra_widgets_final
 
     - name: Создать/Обновить дашборд "System Health Overview"
       community.zabbix.zabbix_dashboard:
@@ -52,7 +103,6 @@
         state: present
         dashboard_name: "System Health Overview"
         pages:
-          # Страница 1: Overview (Системные виджеты)
           - name: "Overview"
             widgets:
               - type: problems
@@ -87,47 +137,9 @@
                 y: 9
                 name: "Recent Problems"
 
-          # Страница 2: Web servers (Графики по хостам)
           - name: "Web servers"
-            widgets:
-              # Используем вложенный цикл для создания сетки графиков
-              # Логика: 2 колонки (ширина 12), динамическая высота
-              - type: graph
-                width: 12
-                height: 5
-                x: "{{ (item.0 * 12) % 24 }}" # 0 для левой колонки, 12 для правой
-                y: "{{ (item.0 // 2) * 5 }}"   # Смещение вниз каждые 2 элемента
-                name: "{{ item.1.host }} - {{ item.1.label }}"
-                resource_type: graph
-                graph:
-                  resource:
-                    name: "{{ item.1.name }}"
-                    host: "{{ item.1.host }}"
-              # Вложенный цикл: with_subelements проходит по хостам, а затем по графикам для каждого
-              with_subelements:
-                - "{{ dashboard_hosts_web | map('regex_replace', '^(.*)$', '{\"host\": \"\\1\"}') | map('from_json') | list }}"
-                - "{{ common_graphs }}"
-              loop_control:
-                label: "{{ item.1.host }} - {{ item.1.name }}"
-                # Нам нужен плоский индекс 0,1,2,3... для расчета координат X/Y
-                index_var: item_idx
+            widgets: "{{ web_widgets_final }}"
 
-          # Страница 3: Infra (Графики по хостам) 
           - name: "Infra"
-            widgets:
-              - type: graph
-                width: 12
-                height: 5
-                x: "{{ (item.0 * 12) % 24 }}"
-                y: "{{ (item.0 // 2) * 5 }}"
-                name: "{{ item.1.host }} - {{ item.1.label }}"
-                resource_type: graph
-                graph:
-                  resource:
-                    name: "{{ item.1.name }}"
-                    host: "{{ item.1.host }}"
-              with_subelements:
-                - "{{ dashboard_hosts_infra | map('regex_replace', '^(.*)$', '{\"host\": \"\\1\"}') | map('from_json') | list }}"
-                - "{{ common_graphs }}"
-              loop_control:
-                label: "{{ item.1.host }} - {{ item.1.name }}"
+            widgets: "{{ infra_widgets_final }}"
+

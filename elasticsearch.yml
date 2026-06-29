@@ -10,16 +10,23 @@
         state: present
         update_cache: yes
 
-    - name: Add Elasticsearch apt key
-      apt_key:
-        url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
-        state: present
-
-    - name: Add Elasticsearch repository
+    # --- ИСПРАВЛЕННАЯ ЧАСТЬ ---
+    # Мы объединяем добавление ключа и репозитория в одну задачу
+    - name: Add Elasticsearch repository (with key)
       apt_repository:
-        repo: "deb https://artifacts.elastic.co/packages/8.x/apt stable main"
+        repo: "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main"
         state: present
+        filename: elasticsearch-8.x
         update_cache: yes
+
+    # Скачиваем ключ отдельно и сохраняем в файл keyring
+    - name: Add Elasticsearch apt key
+      ansible.builtin.get_url:
+        url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+        dest: /usr/share/keyrings/elasticsearch-keyring.gpg
+        mode: '0644'
+        force: true
+    # -------------------------
 
     - name: Install Elasticsearch
       apt:
