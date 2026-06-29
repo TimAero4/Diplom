@@ -112,6 +112,14 @@ resource "yandex_alb_load_balancer" "web_balancer" {
     yandex_compute_instance.web_1,
     yandex_compute_instance.web_2
   ]
+
+  # Added timeouts block
+  timeouts {
+    create = "60m"
+    update = "60m"
+    delete = "60m"
+  }
+
 }
 
 # Output the balancer public IP
