@@ -23,5 +23,6 @@ Host *.ru-central1.internal
 
 ```
 
-Или более простой для понимания, но менее удобный для частого применения: ssh -J <jump server> <remote server>
+Или более простой для понимания, но менее удобный для частого применения: ssh -J jump_server remote_server
+Также реализован ssh -L 8080:zabbix_internal:80 user@bastion_external
 
