@@ -1,13 +1,19 @@
-- name: Настройка дашбордов и шаблонов Zabbix
-  hosts: localhost
+---
+- name: Configure Zabbix dashboards and verify hosts via API
+  hosts: zabbix
+  become: yes
   gather_facts: no
-  vars_files:
-    - ansible_vault.yml
+
   vars:
-    zabbix_url: "http://{{ zabbix_ip | default('127.0.0.1') }}/api_jsonrpc.php"
+    zabbix_url: "http://127.0.0.1/zabbix/api_jsonrpc.php"
+    zabbix_frontend_config: "/etc/zabbix/web/zabbix.conf.php"
     
-    # ИСПРАВЛЕНИЕ 1: Приводим имена групп к единообразию.
-    # Предполагаем, что в inventory группа называется [zabbix].
+    # Database vars (ensure these match your vault or defaults)
+    zabbix_db_host: "localhost"
+    zabbix_db_name: "zabbix"
+    zabbix_db_user: "zabbix"
+    # Password will be taken from vault_vars.zabbix_db_password or default
+    
     dashboard_hosts_web: "{{ groups['webservers'] | default([]) }}"
     dashboard_hosts_infra: "{{ groups['bastion'] | default([]) + groups['zabbix'] | default([]) + groups['elastic'] | default([]) }}"
     
@@ -17,129 +23,387 @@
       - { name: "Disk space usage %", label: "Disk Space" }
       - { name: "Network traffic", label: "Network" }
 
+    # Host definitions to ensure exist
+    required_hosts:
+      - { host: "web-1", name: "Web Server 1", ip: "10.0.1.16" }
+      - { host: "web-2", name: "Web Server 2", ip: "10.0.2.7" }
+      - { host: "elastic-1", name: "Elastic Server 1", ip: "10.0.2.18" }
+
+  handlers:
+    - name: restart apache
+      service:
+        name: apache2
+        state: restarted
+
   tasks:
-    # Проверка соединения с API (опционально, но полезно для отладки)
-    - name: Проверка доступности Zabbix API
+    # ---------------------------------------------------------
+    # PREPARATION
+    # ---------------------------------------------------------
+    - name: Check if Python3 is present
+      raw: test -e /usr/bin/python3
+      register: python_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Install Python3 if absent
+      raw: apt-get update && apt-get install -y python3
+      when: python_check.rc != 0
+
+    - name: Create temp directory
+      file:
+        path: /tmp/ansible_config
+        state: directory
+        mode: '0755'
+
+    - name: Copy ansible_vault.yml to remote host
+      copy:
+        src: "./ansible_vault.yml"
+        dest: "/tmp/ansible_vault.yml"
+        mode: '0600'
+
+    - name: Read vault file content
+      slurp:
+        src: "/tmp/ansible_vault.yml"
+      register: vault_content
+
+    - name: Decode vault variables
+      set_fact:
+        vault_vars: "{{ vault_content.content | b64decode | from_yaml }}"
+
+    - name: Set API and DB credentials from vault
+      set_fact:
+        zabbix_api_user: "{{ vault_vars.zabbix_api_user }}"
+        zabbix_api_password: "{{ vault_vars.zabbix_api_password }}"
+        zabbix_db_password: "{{ vault_vars.zabbix_db_password | default('zabbix') }}"
+
+    # ---------------------------------------------------------
+    # STEP 0: Configure Zabbix Frontend (Fixes "Config file does not exist")
+    # ---------------------------------------------------------
+    - name: Ensure Zabbix web config directory exists
+      file:
+        path: /etc/zabbix/web
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: Generate zabbix.conf.php for Frontend/API
+      copy:
+        dest: "{{ zabbix_frontend_config }}"
+        content: |
+          <?php
+          global $DB;
+          $DB['TYPE']     = 'MYSQL';
+          $DB['SERVER']   = '{{ zabbix_db_host }}';
+          $DB['PORT']     = '0';
+          $DB['DATABASE'] = '{{ zabbix_db_name }}';
+          $DB['USER']     = '{{ zabbix_db_user }}';
+          $DB['PASSWORD'] = '{{ zabbix_db_password }}';
+          $DB['SCHEMA'] = '';
+          $ZBX_SERVER      = 'localhost';
+          $ZBX_SERVER_PORT = '10051';
+          $ZBX_SERVER_NAME = 'Zabbix';
+          $IMAGE_FORMAT_DEFAULT = IMAGE_FORMAT_PNG;
+        owner: www-data
+        group: www-data
+        mode: '0640'
+      notify: restart apache
+
+    - name: Ensure Zabbix Server is running
+      service:
+        name: zabbix-server
+        state: started
+        enabled: yes
+
+    # ---------------------------------------------------------
+    # STEP 1: Authenticate with Zabbix API
+    # ---------------------------------------------------------
+    - name: Authenticate and get API token
       uri:
         url: "{{ zabbix_url }}"
         method: POST
         body_format: json
+        headers:
+          Content-Type: "application/json-rpc"
         body:
           jsonrpc: "2.0"
-          method: "apiinfo.version"
-          params: []
+          method: "user.login"
+          params:
+            username: "{{ zabbix_api_user }}"
+            password: "{{ zabbix_api_password }}"
           id: 1
-          auth: null
-        status_code: 200
-      register: zabbix_api_check
-      failed_when: zabbix_api_check.json is not defined
+      register: zabbix_auth_result
+      failed_when: zabbix_auth_result.json.result is not defined
 
-    # ИСПРАВЛЕНИЕ 2: Генерация виджетов через set_fact.
-    # Используем Jinja2 для формирования списка словарей.
-    
-    - name: Подготовить виджеты для Web Servers
+    - name: Save auth token
       set_fact:
-        web_widgets_final: >
-          {% set result = [] %}
-          {% for host_item in dashboard_hosts_web %}
-            {% for graph_item in common_graphs %}
-              {% set _ = result.append({
-                'type': 'graph',
-                'width': 12,
-                'height': 5,
-                'x': (loop.index0 * 12) % 24,
-                'y': (loop.index0 // 2) * 5,
-                'name': host_item + ' - ' + graph_item.label,
-                'resource_type': 'graph',
-                'graph': {
-                  'resource': {
-                    'name': graph_item.name,
-                    'host': host_item
-                  }
-                }
-              }) %}
-            {% endfor %}
-          {% endfor %}
-          {{ result }}
+        zabbix_auth_token: "{{ zabbix_auth_result.json.result }}"
 
-    - name: Подготовить виджеты для Infra
+    # ---------------------------------------------------------
+    # STEP 2: Fetch Existing Data
+    # ---------------------------------------------------------
+    - name: Get all monitored hosts
+      uri:
+        url: "{{ zabbix_url }}"
+        method: POST
+        body_format: json
+        headers:
+          Content-Type: "application/json-rpc"
+        body:
+          jsonrpc: "2.0"
+          method: "host.get"
+          params:
+            output: ["hostid", "host", "name"]
+            selectInterfaces: ["ip"]
+          auth: "{{ zabbix_auth_token }}"
+          id: 2
+      register: zabbix_hosts_api
+
+    - name: Get all graphs
+      uri:
+        url: "{{ zabbix_url }}"
+        method: POST
+        body_format: json
+        headers:
+          Content-Type: "application/json-rpc"
+        body:
+          jsonrpc: "2.0"
+          method: "graph.get"
+          params:
+            output: ["graphid", "name", "hostid"]
+            hostids: "{{ zabbix_hosts_api.json.result | map(attribute='hostid') | list }}"
+          auth: "{{ zabbix_auth_token }}"
+          id: 3
+      register: zabbix_graphs_api
+
+    # ---------------------------------------------------------
+    # STEP 3: Create Missing Hosts
+    # ---------------------------------------------------------
+    - name: Create missing hosts via API
+      uri:
+        url: "{{ zabbix_url }}"
+        method: POST
+        body_format: json
+        headers:
+          Content-Type: "application/json-rpc"
+        body:
+          jsonrpc: "2.0"
+          method: "host.create"
+          params:
+            host: "{{ item.host }}"
+            name: "{{ item.name }}"
+            interfaces:
+              - type: 1
+                main: 1
+                useip: 1
+                ip: "{{ item.ip }}"
+                dns: ""
+                port: "10050"
+            groups:
+              - groupid: "2" # Assuming 'Linux servers' group ID is 2, adjust if needed
+            status: 0
+          auth: "{{ zabbix_auth_token }}"
+          id: "{{ 10 + loop_index }}"
+      loop: "{{ required_hosts }}"
+      loop_control:
+        index_var: loop_index
+      when: item.host not in (zabbix_hosts_api.json.result | map(attribute='host') | list)
+      register: host_create_result
+
+    # Refresh host list if we created new ones
+    - name: Refresh host list after creation
+      uri:
+        url: "{{ zabbix_url }}"
+        method: POST
+        body_format: json
+        headers:
+          Content-Type: "application/json-rpc"
+        body:
+          jsonrpc: "2.0"
+          method: "host.get"
+          params:
+            output: ["hostid", "host"]
+          auth: "{{ zabbix_auth_token }}"
+          id: 4
+      register: zabbix_hosts_api_updated
+      when: host_create_result is changed
+
+    - name: Update hosts fact with new data
       set_fact:
-        infra_widgets_final: >
-          {% set result = [] %}
-          {% for host_item in dashboard_hosts_infra %}
-            {% for graph_item in common_graphs %}
-              {% set _ = result.append({
-                'type': 'graph',
-                'width': 12,
-                'height': 5,
-                'x': (loop.index0 * 12) % 24,
-                'y': (loop.index0 // 2) * 5,
-                'name': host_item + ' - ' + graph_item.label,
-                'resource_type': 'graph',
-                'graph': {
-                  'resource': {
-                    'name': graph_item.name,
-                    'host': host_item
-                  }
-                }
-              }) %}
-            {% endfor %}
-          {% endfor %}
-          {{ result }}
+        zabbix_hosts_api: "{{ zabbix_hosts_api_updated }}"
+      when: host_create_result is changed
 
-    # Отладка: можно раскомментировать для проверки содержимого списков перед запуском
-    # - name: Отладка web_widgets_final
-    #   debug:
-    #     var: web_widgets_final
-    # - name: Отладка infra_widgets_final
-    #   debug:
-    #     var: infra_widgets_final
+    # ---------------------------------------------------------
+    # STEP 4: Generate Widgets
+    # ---------------------------------------------------------
+    - name: Initialize widget lists
+      set_fact:
+        web_widgets_json: []
+        infra_widgets_json: []
 
-    - name: Создать/Обновить дашборд "System Health Overview"
-      community.zabbix.zabbix_dashboard:
-        server_url: "{{ zabbix_url }}"
-        http_login_user: "{{ zabbix_api_user }}"
-        http_login_password: "{{ zabbix_api_password }}"
-        state: present
-        dashboard_name: "System Health Overview"
-        pages:
-          - name: "Overview"
-            widgets:
-              - type: problems
-                width: 12
-                height: 5
-                x: 0
-                y: 0
-              - type: hostavail
-                width: 12
-                height: 5
-                x: 12
-                y: 0
-              - type: systeminfo
-                width: 12
-                height: 4
-                x: 0
-                y: 5
-              - type: tophosts
-                width: 12
-                height: 4
-                x: 12
-                y: 5
-                name: "Top hosts by CPU"
-                fields:
-                  - type: item
-                    name: "CPU utilization"
-                    color: "FF0000"
-              - type: problems
-                width: 24
-                height: 5
-                x: 0
-                y: 9
-                name: "Recent Problems"
+    - name: Generate Web Server widgets
+      set_fact:
+        web_widgets_json: >-
+          {{ web_widgets_json + [{
+            'type': 'graph',
+            'width': 12,
+            'height': 5,
+            'x': (loop_idx % 2) * 12,
+            'y': (loop_idx // 2) * 5,
+            'name': host_item + ' - ' + graph_item.label,
+            'fields': [
+              {'type': '0', 'name': 'graphid', 'value': graph_id}
+            ]
+          }] }}
+      loop: "{{ dashboard_hosts_web | product(common_graphs) | list }}"
+      loop_control:
+        loop_var: loop_item
+        index_var: loop_idx
+      vars:
+        host_item: "{{ loop_item[0] }}"
+        graph_item: "{{ loop_item[1] }}"
+        host_id_obj: >-
+          {{ zabbix_hosts_api.json.result | selectattr('host', 'equalto', host_item) | list | first }}
+        host_id: "{{ host_id_obj.hostid if host_id_obj is defined else '' }}"
+        graph_id_obj: >-
+          {{ zabbix_graphs_api.json.result | selectattr('name', 'equalto', graph_item.name) | selectattr('hostid', 'equalto', host_id) | list | first }}
+        graph_id: "{{ graph_id_obj.graphid if graph_id_obj is defined else '' }}"
+      when: 
+        - host_id != ''
+        - graph_id != ''
 
-          - name: "Web servers"
-            widgets: "{{ web_widgets_final }}"
+    - name: Generate Infra widgets
+      set_fact:
+        infra_widgets_json: >-
+          {{ infra_widgets_json + [{
+            'type': 'graph',
+            'width': 12,
+            'height': 5,
+            'x': (loop_idx % 2) * 12,
+            'y': (loop_idx // 2) * 5,
+            'name': host_item + ' - ' + graph_item.label,
+            'fields': [
+              {'type': '0', 'name': 'graphid', 'value': graph_id}
+            ]
+          }] }}
+      loop: "{{ dashboard_hosts_infra | product(common_graphs) | list }}"
+      loop_control:
+        loop_var: loop_item
+        index_var: loop_idx
+      vars:
+        host_item: "{{ loop_item[0] }}"
+        graph_item: "{{ loop_item[1] }}"
+        host_id_obj: >-
+          {{ zabbix_hosts_api.json.result | selectattr('host', 'equalto', host_item) | list | first }}
+        host_id: "{{ host_id_obj.hostid if host_id_obj is defined else '' }}"
+        graph_id_obj: >-
+          {{ zabbix_graphs_api.json.result | selectattr('name', 'equalto', graph_item.name) | selectattr('hostid', 'equalto', host_id) | list | first }}
+        graph_id: "{{ graph_id_obj.graphid if graph_id_obj is defined else '' }}"
+      when: 
+        - host_id != ''
+        - graph_id != ''
 
-          - name: "Infra"
-            widgets: "{{ infra_widgets_final }}"
+    # ---------------------------------------------------------
+    # STEP 5: Create or Update Dashboard
+    # ---------------------------------------------------------
+    - name: Check if Dashboard exists
+      uri:
+        url: "{{ zabbix_url }}"
+        method: POST
+        body_format: json
+        headers:
+          Content-Type: "application/json-rpc"
+        body:
+          jsonrpc: "2.0"
+          method: "dashboard.get"
+          params:
+            output: ["dashboardid"]
+            filter:
+              name: "System Health Overview"
+          auth: "{{ zabbix_auth_token }}"
+          id: 5
+      register: dashboard_check
 
+    - name: Create Dashboard
+      uri:
+        url: "{{ zabbix_url }}"
+        method: POST
+        body_format: json
+        headers:
+          Content-Type: "application/json-rpc"
+        body:
+          jsonrpc: "2.0"
+          method: "dashboard.create"
+          params:
+            name: "System Health Overview"
+            pages:
+              - name: "Overview"
+                widgets:
+                  - type: problems
+                    name: "Problems"
+                    width: 12
+                    height: 5
+                    x: 0
+                    y: 0
+                  - type: hostavail
+                    name: "Host availability"
+                    width: 12
+                    height: 5
+                    x: 12
+                    y: 0
+              - name: "Web servers"
+                widgets: "{{ web_widgets_json }}"
+              - name: "Infra"
+                widgets: "{{ infra_widgets_json }}"
+          auth: "{{ zabbix_auth_token }}"
+          id: 6
+      register: dashboard_create_result
+      when: dashboard_check.json.result | length == 0
+
+    - name: Update Dashboard
+      uri:
+        url: "{{ zabbix_url }}"
+        method: POST
+        body_format: json
+        headers:
+          Content-Type: "application/json-rpc"
+        body:
+          jsonrpc: "2.0"
+          method: "dashboard.update"
+          params:
+            dashboardid: "{{ dashboard_check.json.result[0].dashboardid }}"
+            pages:
+              - name: "Overview"
+                widgets:
+                  - type: problems
+                    name: "Problems"
+                    width: 12
+                    height: 5
+                    x: 0
+                    y: 0
+                  - type: hostavail
+                    name: "Host availability"
+                    width: 12
+                    height: 5
+                    x: 12
+                    y: 0
+              - name: "Web servers"
+                widgets: "{{ web_widgets_json }}"
+              - name: "Infra"
+                widgets: "{{ infra_widgets_json }}"
+          auth: "{{ zabbix_auth_token }}"
+          id: 7
+      register: dashboard_update_result
+      when: dashboard_check.json.result | length > 0
+
+    - name: Display result
+      debug:
+        msg: "Dashboard successfully {{ 'created' if dashboard_create_result is skipped else 'updated' }}."
+
+    # ---------------------------------------------------------
+    # CLEANUP
+    # ---------------------------------------------------------
+    - name: Delete temporary vault file
+      file:
+        path: "/tmp/ansible_vault.yml"
+        state: absent
