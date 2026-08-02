@@ -2,27 +2,27 @@ filebeat.inputs:
 - type: log
   enabled: true
   paths:
+    - /var/log/nginx/*.log
     - /var/log/nginx/access.log
-  fields:
-    logtype: nginx-access
-  fields_under_root: true
-
-- type: log
-  enabled: true
-  paths:
     - /var/log/nginx/error.log
-  fields:
-    logtype: nginx-error
-  fields_under_root: true
 
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: false
+
+# Настройка вывода в Elasticsearch (работает в Docker на хосте elastic)
 output.elasticsearch:
   hosts: ["{{ elasticsearch_host }}:9200"]
-  index: "nginx-logs-%{+yyyy.MM.dd}"
+  # Если безопасность включена в Docker, здесь могут понадобиться логин/пароль
+  # username: "elastic"
+  # password: "changeme"
 
-setup.template.name: "nginx-logs"
-setup.template.pattern: "nginx-logs-*"
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_cloud_metadata: ~
+  - add_docker_metadata: ~
+  - add_kubernetes_metadata: ~
 
-setup.kibana:
-  host: "{{ elasticsearch_host }}:5601"
 
 

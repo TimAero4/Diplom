@@ -9,15 +9,18 @@
 9.  Далее устанавливаем zabbix-server командой ansible-playbook -i hosts.ini zabbix-server.yml  
 10. После устанавливаем zabix-agent командой ansible-playbook -i hosts.ini zabbix-agent.yml 
 11. Следующим шагом настраиваем dashboard при помощи команды  ansible-playbook -i hosts.ini zabbix-dashboards.yml 
-
+12. В части ELK используется Elastic и Kibana на elastic web-server и filebeats для сбора логов. На сервере elastic необходимо
+разместить docker_compose.yml и filebeat.yml.j2, запустить Elastic и Kibana при помощи sudo docker compose up -d
+13. Установка filebeat  осуществляется при помощи ansible-playbook -i hosts.ini filebeat.yml --ask-vault-pass
 
 Для проверки того, что инфраструктура настроена верно, необходимо после 
 1. выполения playbook ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i ./hosts.ini test.yml выполнить
-   curl http://<web-balancer_ip> в результате можно увидеть как при разном количестве запросов меняется 
+   curl http://web-balancer_ipv4 в результате можно увидеть как при разном количестве запросов меняется 
    web-1 и web-2 в ответ на curl
-2. 
-3.
-4.   
+2. Для проверки Zabbix и Dashboards необходимо ssh -N -o ExitOnForwardFailure=yes -J user@ ipv4_bastion-L 8081:127.0.0.1:80 user@ipv4_zabbix_server
+3. Далее в браузере с localhost  http://127.0.0.1:8081/zabbix/ войти в Zabbix и в Monitoring → Hosts проверить состояние хостов.
+4. Запуск Elastic и Kibana можно при помощи curl localhost:9200
+
 
 https://www.jeffgeerling.com/blog/2022/using-ansible-playbook-ssh-bastion-jump-host
 
