@@ -1,3 +1,4 @@
+Отказоустойчивая инфраструктруа для сайта, включающая мониторинг, сбор логов и резервное копирование основных данных.
 1.  Создать сервисный аккаунт в облаке. Выдать права editor
 2.  Выпустить авторизованный ключ для этого аккаунта и скачать его по пути ~/.authorized_key.json . 
 3.  Вписать в переменные cloud_id и folder_id в variables.tf
@@ -11,7 +12,9 @@
 11. Следующим шагом настраиваем dashboard при помощи команды  ansible-playbook -i hosts.ini zabbix-dashboards.yml 
 12. В части ELK используется Elastic и Kibana на elastic web-server и filebeats для сбора логов. На сервере elastic необходимо
 разместить docker_compose.yml и filebeat.yml.j2, запустить Elastic и Kibana при помощи sudo docker compose up -d
-13. Установка filebeat  осуществляется при помощи ansible-playbook -i hosts.ini filebeat.yml --ask-vault-pass
+13. Установку fобраза filebeat на web-1 и web-2 лучше всего произвести при помощи docker pull elastic/filebeat:8.11.1
+14. Запуск контейнера необходимо призвести при помощи docker run -d --name=filebeat --user=root --volume="/var/log/nginx:/var/log/nginx:ro" --volume="$(pwd)/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro" elastic/filebeat:8.11.1
+15. Далее для инициализации в Kibana необходимо произвести  docker exec filebeat filebeat setup на web-1 и web-2.
 
 Для проверки того, что инфраструктура настроена верно, необходимо после 
 1. выполения playbook ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i ./hosts.ini test.yml выполнить
@@ -19,8 +22,9 @@
    web-1 и web-2 в ответ на curl
 2. Для проверки Zabbix и Dashboards необходимо ssh -N -o ExitOnForwardFailure=yes -J user@ ipv4_bastion-L 8081:127.0.0.1:80 user@ipv4_zabbix_server
 3. Далее в браузере с localhost  http://127.0.0.1:8081/zabbix/ войти в Zabbix и в Monitoring → Hosts проверить состояние хостов.
-4. Запуск Elastic и Kibana можно при помощи curl localhost:9200
-
+4. Проверку Elastic и Kibana можно осуществить при помощи прсмотра инофрмации в браузере http://localhost:9200 http://localhost:5601
+5. Проверка после установки filebeat должна быть docker exec filebeat filebeat test config (вернуть должно Config OK)
+6. Также проверка docker exec filebeat filebeat test output (должна вывести elasticsearch: http://ip_v4_elastic:9200... далее OK по всем параметрам)
 
 https://www.jeffgeerling.com/blog/2022/using-ansible-playbook-ssh-bastion-jump-host
 
