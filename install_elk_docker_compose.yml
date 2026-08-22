@@ -1,0 +1,74 @@
+- name: Install Elasticsearch and Kibana with Docker Compose
+  hosts: elastic
+  become: true
+  vars:
+    # Путь, где будут лежать файлы на сервере
+    project_dir: "/opt/elastic-stack"
+
+  tasks:
+    - name: Install python3-pip and docker-compose
+      apt:
+        name:
+          - python3-pip
+          - docker-compose
+        state: present
+        update_cache: yes
+
+    - name: Create project directory
+      file:
+        path: "{{ project_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy docker-compose.yml
+      copy:
+        dest: "{{ project_dir }}/docker-compose.yml"
+        content: |
+          version: '3.8'
+          services:
+            elasticsearch:
+              image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+              container_name: elasticsearch
+              environment:
+                - discovery.type=single-node
+                - xpack.security.enabled=false
+                - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+                - bootstrap.memory_lock=true
+              ulimits:
+                memlock:
+                  soft: -1
+                  hard: -1
+              ports:
+                - "9200:9200"
+                - "9300:9300"
+              volumes:
+                - elasticsearch_data:/usr/share/elasticsearch/data
+              networks:
+                - elk
+
+            kibana:
+              image: docker.elastic.co/kibana/kibana:8.11.1
+              container_name: kibana
+              ports:
+                - "5601:5601"
+              environment:
+                - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+                - SERVER_NAME=kibana
+              depends_on:
+                - elasticsearch
+              networks:
+                - elk
+
+          volumes:
+            elasticsearch_data:
+
+          networks:
+            elk:
+              driver: bridge
+
+    - name: Run docker-compose up
+      docker_compose:
+        project_src: "{{ project_dir }}"
+        state: present
+        # Если нужно перезапустить сервисы при изменении compose файла
+        restarted: true

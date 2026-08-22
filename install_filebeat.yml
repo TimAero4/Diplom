@@ -1,0 +1,39 @@
+- name: Install Filebeat on Webservers
+  hosts: webservers
+  become: true
+  vars:
+    # IP адрес сервера Elasticsearch (такой же, как в inventory для группы elastic)
+    elasticsearch_host: "10.0.2.18"
+    filebeat_image: "elastic/filebeat:8.11.1"
+
+  tasks:
+    - name: Create filebeat configuration directory
+      file:
+        path: /opt/filebeat
+        state: directory
+        mode: '0755'
+
+    - name: Deploy filebeat.yml configuration using Jinja2 template
+      template:
+        src: filebeat.yml.j2
+        dest: /opt/filebeat/filebeat.yml
+        owner: root
+        group: root
+        mode: '0644'
+      
+    - name: Stop and remove existing filebeat container if exists
+      docker_container:
+        name: filebeat
+        state: absent
+
+    - name: Run Filebeat container
+      docker_container:
+        name: filebeat
+        image: "{{ filebeat_image }}"
+        state: started
+        user: root
+        # Мы НЕ используем сети здесь, так как подключаемся по IP хоста
+        volumes:
+          - "/var/log/nginx:/var/log/nginx:ro"
+          - "/opt/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro"
+        restart_policy: unless-stopped
