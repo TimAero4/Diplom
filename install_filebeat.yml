@@ -3,7 +3,7 @@
   become: true
   vars:
     # IP адрес сервера Elasticsearch (такой же, как в inventory для группы elastic)
-    elasticsearch_host: "10.0.2.18"
+    elasticsearch_host: "{{ hostvars[groups['elastic'][0]].ansible_host }}"
     filebeat_image: "elastic/filebeat:8.11.1"
 
   tasks:
