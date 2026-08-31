@@ -10,8 +10,8 @@
 9.  Далее устанавливаем zabbix-server командой ansible-playbook -i hosts.ini zabbix-server.yml  
 10. После устанавливаем zabix-agent командой ansible-playbook -i hosts.ini zabbix-agent.yml 
 11. Следующим шагом настраиваем dashboard при помощи команды  ansible-playbook -i hosts.ini zabbix-dashboards.yml 
-12. Для установки на elastic web-server Elastic и Kibana необходимо ansible-playbook -i inventory install_elk_docker_compose.yml
-13. Установку filebeat на web-1 и web-2 необходимо произвести при помощи ansible-playbook -i inventory install_filebeat.yml
+12. Для установки на elastic web-server Elastic и Kibana необходимо ansible-playbook -i hosts.ini install_elk_docker_compose.yml
+13. Установку filebeat на web-1 и web-2 необходимо произвести при помощи ansible-playbook -i hosts.ini install_filebeat.yml
 14. Далее для инициализации filebeat в Kibana необходимо произвести  docker exec filebeat filebeat setup на web-1 и web-2.
 
 Для проверки того, что инфраструктура настроена верно, необходимо после 
